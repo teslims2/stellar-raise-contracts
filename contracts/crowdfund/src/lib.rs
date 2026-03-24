@@ -6,11 +6,16 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, token, Address, Env, IntoVal, String,
     Symbol, Vec,
 };
-mod refund_single_token;
+pub mod refund_single_token;
 use refund_single_token::refund_single_transfer;
+
+pub mod soroban_sdk_minor;
 
 #[cfg(test)]
 mod auth_tests;
+pub mod campaign_goal_minimum;
+#[cfg(test)]
+mod campaign_goal_minimum_test;
 pub mod contribute_error_handling;
 #[cfg(test)]
 mod contribute_error_handling_tests;
@@ -670,6 +675,16 @@ impl CrowdfundContract {
     pub fn refund_single(env: Env, contributor: Address) -> Result<(), ContractError> {
         contributor.require_auth();
 
+    /// Claim a refund for a single contributor (pull-based).
+    ///
+    /// # Errors
+    /// * [`ContractError::CampaignStillActive`] when deadline has not passed.
+    /// * [`ContractError::GoalReached`] when the funding goal was met.
+    /// * [`ContractError::NothingToRefund`] when the contributor has no balance.
+    pub fn refund_single(env: Env, contributor: Address) -> Result<(), ContractError> {
+        contributor.require_auth();
+
+        // A successful or cancelled campaign cannot be refunded.
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status == Status::Successful || status == Status::Cancelled {
             panic!("campaign is not active");
@@ -697,12 +712,20 @@ impl CrowdfundContract {
             .persistent()
             .get(&contribution_key)
             .unwrap_or(0);
-
         if amount == 0 {
             return Err(ContractError::NothingToRefund);
         }
 
         // ── Checks-Effects-Interactions ──────────────────────────────────────
+        let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_address);
+        refund_single_transfer(
+            &token_client,
+            &env.current_contract_address(),
+            &contributor,
+            amount,
+        );
+
         env.storage().persistent().set(&contribution_key, &0i128);
         env.storage()
             .persistent()
