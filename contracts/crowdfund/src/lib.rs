@@ -15,6 +15,11 @@ pub mod contract_state_size;
 #[cfg(test)]
 mod contract_state_size_test;
 
+pub mod admin_upgrade_mechanism;
+#[cfg(test)]
+#[path = "admin_upgrade_mechanism.test.rs"]
+mod admin_upgrade_mechanism_test;
+
 pub mod refund_single_token;
 use refund_single_token::{
     execute_refund_single, refund_single_transfer, validate_refund_preconditions,
