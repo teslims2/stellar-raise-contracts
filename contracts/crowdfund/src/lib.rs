@@ -265,6 +265,7 @@ impl CrowdfundContract {
         platform_config: Option<PlatformConfig>,
         bonus_goal: Option<i128>,
         bonus_goal_description: Option<String>,
+        metadata_uri: Option<String>,
     ) -> Result<(), ContractError> {
 
         execute_initialize(
@@ -311,6 +312,17 @@ impl CrowdfundContract {
             &platform_config,
             bonus_goal,
             &bonus_goal_description,
+        );
+
+        // Store optional IPFS metadata URI.
+        if let Some(ref uri) = metadata_uri {
+            env.storage().instance().set(&DataKey::MetadataUri, uri);
+        }
+
+        // Emit CampaignCreated event for off-chain indexers.
+        env.events().publish(
+            ("campaign", "campaign_created"),
+            (creator.clone(), token.clone(), goal, deadline, metadata_uri),
         );
 
         Ok(())
@@ -449,9 +461,11 @@ impl CrowdfundContract {
                 .extend_ttl(&DataKey::Contributors, 100, 100);
         }
 
-        // Emit contribution event
-        env.events()
-            .publish(("campaign", "contributed"), (contributor, amount));
+        // Emit PledgeReceived event — includes total_raised for real-time progress bars.
+        env.events().publish(
+            ("campaign", "pledge_received"),
+            (contributor, amount, new_total),
+        );
 
         Ok(())
     }

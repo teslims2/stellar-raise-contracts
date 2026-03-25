@@ -425,6 +425,7 @@ fn test_withdraw_emits_fee_transferred_event() {
         &Some(config),
         &None,
         &None,
+        &None,
     );
 
     let contributor = Address::generate(&env);
