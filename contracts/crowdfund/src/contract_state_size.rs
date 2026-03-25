@@ -15,6 +15,9 @@ pub const MAX_CONTRIBUTORS: u32 = 128;
 /// Maximum number of unique pledgers tracked on-chain.
 pub const MAX_PLEDGERS: u32 = 128;
 
+/// Maximum number of unique pledgers tracked on-chain.
+pub const MAX_PLEDGERS: u32 = 1_000;
+
 /// Maximum number of roadmap items stored in instance storage.
 pub const MAX_ROADMAP_ITEMS: u32 = 32;
 
@@ -36,6 +39,24 @@ pub const MAX_METADATA_TOTAL_LENGTH: u32 = 2_304;
 /// Backward-compatible generic string limit used by legacy tests/helpers.
 pub const MAX_STRING_LEN: u32 = 256;
 pub const MAX_CONTRIBUTORS: u32 = 1_000;
+
+/// Maximum byte length of title field.
+pub const MAX_TITLE_LENGTH: u32 = 100;
+
+/// Maximum byte length of description field.
+pub const MAX_DESCRIPTION_LENGTH: u32 = 2000;
+
+/// Maximum byte length of bonus goal description field.
+pub const MAX_BONUS_GOAL_DESCRIPTION_LENGTH: u32 = 500;
+
+/// Maximum byte length of roadmap description field.
+pub const MAX_ROADMAP_DESCRIPTION_LENGTH: u32 = 500;
+
+/// Maximum byte length of social links field.
+pub const MAX_SOCIAL_LINKS_LENGTH: u32 = 300;
+
+/// Maximum total byte length of all metadata fields combined.
+pub const MAX_METADATA_TOTAL_LENGTH: u32 = 4000;
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
