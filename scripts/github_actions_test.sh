@@ -104,6 +104,14 @@ else
   pass "testnet_smoke.yml does not reference deprecated soroban-cli"
 fi
 
+# ── Check 8: rust_ci.yml includes a frontend test job ─────────────────────────
+
+if ! grep -qE "^  frontend:" "$WORKFLOWS_DIR/rust_ci.yml"; then
+  fail "rust_ci.yml is missing a 'frontend' job for UI tests"
+else
+  pass "rust_ci.yml includes a 'frontend' job for UI tests"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo ""

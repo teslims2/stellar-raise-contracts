@@ -507,3 +507,61 @@ fn test_refund_single_minimum_contribution_amount() {
     let tc = token::Client::new(&env, &token);
     assert_eq!(tc.balance(&alice), 1_000);
 }
+
+/// @test refund_available returns the correct amount when refund is possible.
+#[test]
+fn test_refund_available_returns_amount_when_possible() {
+    let (env, client, creator, token, _) = setup();
+    let deadline = env.ledger().timestamp() + 3_600;
+    init(&client, &creator, &token, 1_000_000, deadline);
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &alice, 50_000);
+    client.contribute(&alice, &50_000);
+
+    env.ledger().set_timestamp(deadline + 1);
+
+    let result = client.refund_available(&alice);
+    assert_eq!(result, Ok(50_000));
+}
+
+/// @test refund_available returns NothingToRefund after refund is claimed.
+#[test]
+fn test_refund_available_returns_nothing_to_refund_after_claim() {
+    let (env, client, creator, token, _) = setup();
+    let deadline = env.ledger().timestamp() + 3_600;
+    init(&client, &creator, &token, 1_000_000, deadline);
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &alice, 50_000);
+    client.contribute(&alice, &50_000);
+
+    env.ledger().set_timestamp(deadline + 1);
+
+    // Check available before claiming
+    let result = client.refund_available(&alice);
+    assert_eq!(result, Ok(50_000));
+
+    // Claim refund
+    client.refund_single(&alice);
+
+    // Check available after claiming
+    let result = client.refund_available(&alice);
+    assert_eq!(result, Err(ContractError::NothingToRefund));
+}
+
+/// @test refund_available returns CampaignStillActive before deadline.
+#[test]
+fn test_refund_available_returns_campaign_still_active_before_deadline() {
+    let (env, client, creator, token, _) = setup();
+    let deadline = env.ledger().timestamp() + 3_600;
+    init(&client, &creator, &token, 1_000_000, deadline);
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &alice, 50_000);
+    client.contribute(&alice, &50_000);
+
+    // Do not advance past deadline
+    let result = client.refund_available(&alice);
+    assert_eq!(result, Err(ContractError::CampaignStillActive));
+}

@@ -23,22 +23,30 @@ use refund_single_token::{
 mod refund_single_token_test;
 
 pub mod soroban_sdk_minor;
+#[cfg(test)]
+mod soroban_sdk_minor_test;
+#[path = "stellar_token_minter_test.rs"]
+mod stellar_token_minter_test;
 
 #[cfg(test)]
 mod auth_tests;
 pub mod campaign_goal_minimum;
 #[cfg(test)]
 mod campaign_goal_minimum_test;
-pub mod contract_state_size;
+pub mod crowdfund_initialize_function;
 #[cfg(test)]
-#[path = "contract_state_size.test.rs"]
-mod contract_state_size_test;
+#[path = "crowdfund_initialize_function.test.rs"]
+mod crowdfund_initialize_function_test;
 pub mod contribute_error_handling;
 #[cfg(test)]
 mod contribute_error_handling_tests;
 pub mod proptest_generator_boundary;
 #[cfg(test)]
+#[path = "proptest_generator_boundary.test.rs"]
 mod proptest_generator_boundary_tests;
+pub mod stellar_token_minter;
+#[cfg(test)]
+mod stellar_token_minter_test;
 #[cfg(test)]
 mod refund_single_token_tests;
 #[cfg(test)]
@@ -220,70 +228,25 @@ impl CrowdfundContract {
         }
 
         creator.require_auth();
-
-        // Store admin for upgrade authorization.
-        env.storage().instance().set(&DataKey::Admin, &admin);
-
-        if let Some(ref config) = platform_config {
-            if config.fee_bps > 10_000 {
-                panic!("platform fee cannot exceed 100%");
-            }
-            env.storage()
-                .instance()
-                .set(&DataKey::PlatformConfig, config);
-        }
-
-        if let Some(bg) = bonus_goal {
-            if bg <= goal {
-                panic!("bonus goal must be greater than primary goal");
-            }
-            env.storage().instance().set(&DataKey::BonusGoal, &bg);
-        }
-
-        if let Some(bg_description) = bonus_goal_description {
-            if let Err(err) = contract_state_size::validate_bonus_goal_description(&bg_description)
-            {
-                panic!("{}", err);
-            }
-            env.storage()
-                .instance()
-                .set(&DataKey::BonusGoalDescription, &bg_description);
-        }
-
-        env.storage().instance().set(&DataKey::Creator, &creator);
-        env.storage().instance().set(&DataKey::Token, &token);
-
-        // Returns the list of all contributor addresses.
-        #[allow(dead_code)]
-        pub fn contributors(env: Env) -> Vec<Address> {
-            env.storage()
-                .instance()
-                .get(&DataKey::Contributors)
-                .unwrap_or(Vec::new(&env))
-        }
-
-        env.storage().instance().set(&DataKey::Goal, &goal);
-        env.storage().instance().set(&DataKey::Deadline, &deadline);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinContribution, &min_contribution);
-        env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage()
-            .instance()
-            .set(&DataKey::BonusGoalReachedEmitted, &false);
-        env.storage()
-            .instance()
-            .set(&DataKey::Status, &Status::Active);
-
-        let empty_contributors: Vec<Address> = Vec::new(&env);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Contributors, &empty_contributors);
-
-        let empty_roadmap: Vec<RoadmapItem> = Vec::new(&env);
-        env.storage()
-            .instance()
-            .set(&DataKey::Roadmap, &empty_roadmap);
+        crate::crowdfund_initialize_function::validate_initialize_inputs(
+            goal,
+            min_contribution,
+            &platform_config,
+            bonus_goal,
+            &bonus_goal_description,
+        );
+        crate::crowdfund_initialize_function::persist_initialize_state(
+            &env,
+            &admin,
+            &creator,
+            &token,
+            goal,
+            deadline,
+            min_contribution,
+            &platform_config,
+            bonus_goal,
+            &bonus_goal_description,
+        );
 
         Ok(())
     }
@@ -306,10 +269,12 @@ impl CrowdfundContract {
         // Guard: campaign must be active.
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status != Status::Active {
+            contribute_error_handling::log_contribute_error(&env, ContractError::CampaignNotActive);
             return Err(ContractError::CampaignNotActive);
         }
 
         if amount == 0 {
+            contribute_error_handling::log_contribute_error(&env, ContractError::ZeroAmount);
             return Err(ContractError::ZeroAmount);
         }
 
@@ -319,11 +284,13 @@ impl CrowdfundContract {
             .get(&DataKey::MinContribution)
             .unwrap();
         if amount < min_contribution {
+            contribute_error_handling::log_contribute_error(&env, ContractError::BelowMinimum);
             return Err(ContractError::BelowMinimum);
         }
 
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
         if env.ledger().timestamp() > deadline {
+            contribute_error_handling::log_contribute_error(&env, ContractError::CampaignEnded);
             return Err(ContractError::CampaignEnded);
         }
 
@@ -356,7 +323,10 @@ impl CrowdfundContract {
 
         let new_contribution = previous_amount
             .checked_add(amount)
-            .ok_or(ContractError::Overflow)?;
+            .ok_or_else(|| {
+                contribute_error_handling::log_contribute_error(&env, ContractError::Overflow);
+                ContractError::Overflow
+            })?;
 
         env.storage()
             .persistent()
@@ -368,7 +338,10 @@ impl CrowdfundContract {
         // Update the global total raised with overflow protection.
         let total: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap();
 
-        let new_total = total.checked_add(amount).ok_or(ContractError::Overflow)?;
+        let new_total = total.checked_add(amount).ok_or_else(|| {
+            contribute_error_handling::log_contribute_error(&env, ContractError::Overflow);
+            ContractError::Overflow
+        })?;
 
         env.storage()
             .instance()
@@ -769,6 +742,21 @@ impl CrowdfundContract {
         contributor.require_auth();
         let amount = validate_refund_preconditions(&env, &contributor)?;
         execute_refund_single(&env, &contributor, amount)
+    }
+
+    /// Check if a refund is available for the given contributor.
+    ///
+    /// This is a view function that can be called to determine if `refund_single`
+    /// would succeed for the given contributor. Useful for frontend UI to show
+    /// refund buttons or status.
+    ///
+    /// Returns the amount that would be refunded if `refund_single` is called,
+    /// or an error if no refund is available.
+    ///
+    /// @param contributor The address to check for refund availability.
+    /// @return `Ok(amount)` if refund is available, `Err(ContractError)` otherwise.
+    pub fn refund_available(env: Env, contributor: Address) -> Result<i128, ContractError> {
+        validate_refund_preconditions(&env, &contributor)
     }
 
     /// Cancel the campaign and refund all contributors — callable only by
