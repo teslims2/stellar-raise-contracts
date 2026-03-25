@@ -22,9 +22,6 @@ fn test_init_stores_admin() {
     let admin = Address::generate(&env);
     client.init(&admin);
 
-    // Test initialization
-    client.init(&admin);
-
     assert_eq!(client.get_admin(), admin);
 }
 
@@ -45,7 +42,7 @@ fn test_init_different_admins() {
 
 /// check_auth returns true when auth is mocked.
 #[test]
-fn test_check_auth_returns_true() {
+fn test_check_auth_returns_true_via_mock() {
     let (env, client) = setup();
     let user = Address::generate(&env);
 
