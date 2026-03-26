@@ -306,3 +306,198 @@ Add to `contracts/crowdfund/admin_upgrade_mechanism.md` under **Security Feature
 - Panic on oversized notes — silent truncation hides bad input from auditors.
 - Keep the note field optional at the call site; pass an empty `String` when no note is needed.
 - The logging helper must be pure with respect to storage — no reads or writes, only `env.events().publish(...)`.
+
+---
+
+## Role Separation & Pausable Logic — Privilege Isolation for Campaign Contracts
+
+### Problem
+
+Currently `DataKey::Admin` is set to the campaign creator at `initialize()`, meaning
+the same key that controls upgrades also controls platform fees and campaign state.
+If that key is compromised, the blast radius covers everything.
+
+The fix is three distinct roles stored separately, a `Paused` state flag, and a
+governance guard on `set_platform_fee`.
+
+---
+
+### 1. Define the three roles in `DataKey`
+
+Add three new storage keys to the `DataKey` enum in `lib.rs`:
+
+```rust
+/// Address with DEFAULT_ADMIN_ROLE — can pause, upgrade, and set fees.
+DefaultAdmin,
+/// Address with PAUSER_ROLE — can pause/unpause but cannot upgrade or set fees.
+Pauser,
+/// Paused flag — when true, contributions and withdrawals are blocked.
+Paused,
+/// Governance address required to set platform fees (multisig or DAO).
+GovernanceAddress,
+```
+
+---
+
+### 2. Store roles at `initialize()`
+
+Update `crowdfund_initialize_function::persist_initialize_state` to accept and store
+the new roles. The `admin` parameter becomes `DEFAULT_ADMIN_ROLE`; `creator` stays
+separate:
+
+```rust
+// In persist_initialize_state (crowdfund_initialize_function.rs)
+env.storage().instance().set(&DataKey::DefaultAdmin, &params.admin);
+env.storage().instance().set(&DataKey::Creator, &params.creator);
+env.storage().instance().set(&DataKey::Pauser, &params.pauser);       // new param
+env.storage().instance().set(&DataKey::GovernanceAddress, &params.governance); // new param
+env.storage().instance().set(&DataKey::Paused, &false);
+```
+
+Update `initialize()` in `lib.rs` to accept `pauser: Address` and
+`governance: Address` as new arguments.
+
+---
+
+### 3. Add a `pause` / `unpause` function
+
+Only `PAUSER_ROLE` or `DEFAULT_ADMIN_ROLE` may call these:
+
+```rust
+/// @notice Pause the contract — blocks contribute() and withdraw().
+/// @dev    Only PAUSER_ROLE or DEFAULT_ADMIN_ROLE may call this.
+pub fn pause(env: Env, caller: Address) {
+    caller.require_auth();
+    let pauser: Address = env.storage().instance().get(&DataKey::Pauser).unwrap();
+    let admin: Address = env.storage().instance().get(&DataKey::DefaultAdmin).unwrap();
+    if caller != pauser && caller != admin {
+        panic!("not authorized to pause");
+    }
+    env.storage().instance().set(&DataKey::Paused, &true);
+    env.events().publish((Symbol::new(&env, "access"), Symbol::new(&env, "paused")), caller);
+}
+
+/// @notice Unpause the contract.
+/// @dev    Only DEFAULT_ADMIN_ROLE may unpause (stricter than pause).
+pub fn unpause(env: Env, caller: Address) {
+    caller.require_auth();
+    let admin: Address = env.storage().instance().get(&DataKey::DefaultAdmin).unwrap();
+    if caller != admin {
+        panic!("only DEFAULT_ADMIN_ROLE can unpause");
+    }
+    env.storage().instance().set(&DataKey::Paused, &false);
+    env.events().publish((Symbol::new(&env, "access"), Symbol::new(&env, "unpaused")), caller);
+}
+```
+
+---
+
+### 4. Add the `paused` guard helper
+
+Create a small helper and call it at the top of `contribute()` and `withdraw()`:
+
+```rust
+/// @notice Panics if the contract is paused.
+/// @dev    Call at the start of any state-mutating function that should
+///         be blocked during an emergency pause.
+pub fn assert_not_paused(env: &Env) {
+    let paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
+    if paused {
+        panic!("contract is paused");
+    }
+}
+```
+
+In `contribute()`:
+```rust
+pub fn contribute(env: Env, contributor: Address, amount: i128) -> Result<(), ContractError> {
+    assert_not_paused(&env);   // <-- add this line
+    contributor.require_auth();
+    // ... rest unchanged
+}
+```
+
+Same in `withdraw()`.
+
+---
+
+### 5. Add `set_platform_fee` gated by governance address
+
+Replace any direct fee mutation with a dedicated function that requires the
+governance address (multisig or DAO contract) to authorize:
+
+```rust
+/// @notice Update the platform fee configuration.
+/// @dev    Only the GovernanceAddress may call this — must be a multisig
+///         or DAO contract, never a single EOA.
+/// @param  caller  – Must match the stored GovernanceAddress.
+/// @param  config  – New fee configuration; fee_bps must be <= 10_000.
+pub fn set_platform_fee(env: Env, caller: Address, config: PlatformConfig) -> Result<(), ContractError> {
+    caller.require_auth();
+    let governance: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::GovernanceAddress)
+        .expect("governance address not set");
+    if caller != governance {
+        panic!("only GovernanceAddress can set platform fee");
+    }
+    if config.fee_bps > 10_000 {
+        return Err(ContractError::InvalidPlatformFee);
+    }
+    env.storage().instance().set(&DataKey::PlatformConfig, &config);
+    env.events().publish(
+        (Symbol::new(&env, "governance"), Symbol::new(&env, "fee_updated")),
+        (caller, config.fee_bps),
+    );
+    Ok(())
+}
+```
+
+---
+
+### 6. Tests to write
+
+Add these to a new `access_control_tests.rs` file:
+
+```rust
+// Pauser can pause; non-pauser cannot
+#[test] fn pauser_can_pause() { ... }
+#[test] #[should_panic(expected = "not authorized to pause")] fn non_pauser_cannot_pause() { ... }
+
+// Only admin can unpause
+#[test] #[should_panic(expected = "only DEFAULT_ADMIN_ROLE can unpause")] fn pauser_cannot_unpause() { ... }
+
+// Contribute blocked when paused
+#[test] #[should_panic(expected = "contract is paused")] fn contribute_blocked_when_paused() { ... }
+
+// Withdraw blocked when paused
+#[test] #[should_panic(expected = "contract is paused")] fn withdraw_blocked_when_paused() { ... }
+
+// Governance address can update fee
+#[test] fn governance_can_set_fee() { ... }
+
+// Non-governance address cannot update fee
+#[test] #[should_panic(expected = "only GovernanceAddress can set platform fee")] fn non_governance_cannot_set_fee() { ... }
+
+// Creator cannot set platform fee directly
+#[test] #[should_panic(expected = "only GovernanceAddress can set platform fee")] fn creator_cannot_set_fee() { ... }
+```
+
+---
+
+### 7. Run the tests
+
+```bash
+cargo test --package crowdfund access_control -- --nocapture
+```
+
+---
+
+### Key security rules
+
+- `DEFAULT_ADMIN_ROLE` is the only address that can unpause — pausing is low-risk, unpausing is high-risk.
+- `CAMPAIGN_CREATOR` has zero access to `pause`, `unpause`, or `set_platform_fee`.
+- `GovernanceAddress` should be set to a multisig contract address at `initialize()`, never a plain wallet.
+- Emit an event on every role-sensitive action (`paused`, `unpaused`, `fee_updated`) so off-chain monitors can alert on unexpected calls.
+- Never store roles as plain strings — use typed `DataKey` enum variants to prevent key-collision bugs.
