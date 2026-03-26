@@ -30,6 +30,13 @@
 
 use std::collections::HashMap;
 
+// ── Bounds ───────────────────────────────────────────────────────────────────
+
+/// @notice Hard cap on the number of packages processed by `audit_all_bounded`.
+/// @dev    Prevents unbounded iteration — mirrors gas-limit patterns used in
+///         on-chain contracts. Adjust upward only with a documented rationale.
+pub const MAX_PACKAGES: u32 = 500;
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /// @notice Hard cap on the number of packages processed by `audit_all_bounded`.

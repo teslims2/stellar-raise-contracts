@@ -14,15 +14,15 @@ SVG files containing a malicious `DOCTYPE` declaration.
 
 ## Vulnerability Fixed
 
-| Field        | Value |
-|--------------|-------|
-| Advisory     | [GHSA-xpqw-6gx7-v673](https://github.com/advisories/GHSA-xpqw-6gx7-v673) |
-| Package      | `svgo` |
-| Severity     | High (CVSS 7.5) |
-| CWE          | CWE-776 (Improper Restriction of Recursive Entity References) |
-| Affected     | `>=3.0.0 <3.3.3` |
-| Fixed in     | `3.3.3` |
-| CVSS vector  | `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` |
+| Field       | Value |
+|-------------|-------|
+| Advisory    | [GHSA-xpqw-6gx7-v673](https://github.com/advisories/GHSA-xpqw-6gx7-v673) |
+| Package     | `svgo` |
+| Severity    | High (CVSS 7.5) |
+| CWE         | CWE-776 (Improper Restriction of Recursive Entity References) |
+| Affected    | `>=3.0.0 <3.3.3` |
+| Fixed in    | `3.3.3` |
+| CVSS vector | `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` |
 
 ### What Changed
 
@@ -123,10 +123,13 @@ The test suite in `npm_package_lock_test.rs` covers **49 test cases** (≥95%):
 - `validate_lockfile_version` — 5 cases (2, 3, 1, 0, 4)
 - `audit_all_bounded` — 7 cases (within limit, empty, matches `audit_all`, exactly at limit, one over limit, error message content, constant positive)
 
----
+`npm audit --audit-level=moderate` is enforced in the `frontend` job of
+`.github/workflows/rust_ci.yml`. The build fails if any moderate-or-higher
+vulnerability is detected in the NPM dependency tree.
 
-## Commit Reference
-
+```yaml
+- name: Audit NPM dependencies
+  run: npm audit --audit-level=moderate
 ```
 feat: implement add-code-comments-to-npm-packagelockjson-minor-vulnerabilities-for-frontend-ui with tests and docs
 ```
@@ -142,7 +145,7 @@ feat: implement add-code-comments-to-npm-packagelockjson-minor-vulnerabilities-f
 
 ## References
 
-- [GHSA-xpqw-6gx7-v673](https://github.com/advisories/GHSA-xpqw-6gx7-v673) — svgo XML entity expansion vulnerability
-- [NPM Lockfile Format](https://docs.npmjs.com/cli/v9/configuring-npm/package-lock-json) — Official documentation
-- [Semantic Versioning](https://semver.org/) — Version specification
-- [SHA-512](https://en.wikipedia.org/wiki/SHA-2) — Cryptographic hash function
+- [GHSA-xpqw-6gx7-v673](https://github.com/advisories/GHSA-xpqw-6gx7-v673)
+- [NPM Lockfile Format](https://docs.npmjs.com/cli/v9/configuring-npm/package-lock-json)
+- [Semantic Versioning](https://semver.org/)
+- [SHA-512](https://en.wikipedia.org/wiki/SHA-2)
