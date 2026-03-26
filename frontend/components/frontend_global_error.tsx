@@ -46,6 +46,67 @@ export class TransactionError extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Logging bounds
+// ---------------------------------------------------------------------------
+
+/**
+ * @dev Maximum number of error log entries emitted within the rolling window.
+ * Prevents log flooding when a component tree repeatedly throws (e.g. during
+ * a render loop or rapid retry cycles).
+ *
+ * @custom:security Bounding log output limits denial-of-service via log
+ * exhaustion and reduces the risk of sensitive data appearing in high-volume
+ * log streams.
+ */
+export const LOG_RATE_LIMIT = 5;
+
+/**
+ * @dev Duration of the rolling rate-limit window in milliseconds (default 60 s).
+ * The counter resets after this period so transient bursts do not permanently
+ * silence the boundary.
+ */
+export const LOG_RATE_WINDOW_MS = 60_000;
+
+/**
+ * @dev Module-level log-rate state. Kept outside the component so it persists
+ * across boundary remounts (e.g. after a "Try Again" reset).
+ *
+ * Exported for test inspection only — do not mutate directly in application code.
+ */
+export const _logState = {
+  count: 0,
+  windowStart: 0,
+};
+
+/**
+ * @dev Resets the log-rate state. Exported for test isolation only.
+ */
+export function _resetLogState(): void {
+  _logState.count = 0;
+  _logState.windowStart = 0;
+}
+
+/**
+ * @dev Determines whether a log entry should be emitted based on the current
+ * rate-limit window. Advances the window when it has expired.
+ *
+ * @param now Current timestamp in milliseconds (injectable for testing).
+ * @return `true` if the log should be emitted; `false` if the rate limit is exceeded.
+ */
+export function shouldLog(now: number = Date.now()): boolean {
+  if (now - _logState.windowStart >= LOG_RATE_WINDOW_MS) {
+    // Start a fresh window.
+    _logState.windowStart = now;
+    _logState.count = 0;
+  }
+  if (_logState.count < LOG_RATE_LIMIT) {
+    _logState.count += 1;
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Error classification helpers
 // ---------------------------------------------------------------------------
 
@@ -161,12 +222,19 @@ interface BoundaryState {
  * @dev React class-based error boundary for the Stellar Raise frontend.
  *
  * Catches synchronous render-phase errors anywhere in the wrapped component
- * tree, classifies them (generic vs. smart-contract), logs a structured report,
- * and renders an appropriate fallback UI with a "Try Again" recovery path.
+ * tree, classifies them (generic vs. smart-contract), logs a structured report
+ * subject to a rate limit, and renders an appropriate fallback UI with a
+ * "Try Again" recovery path.
  *
  * Lifecycle:
  *   Error thrown → getDerivedStateFromError (state update) →
  *   componentDidCatch (logging + reporting) → fallback render
+ *
+ * Logging bounds:
+ *   At most LOG_RATE_LIMIT (5) console.error calls are emitted per
+ *   LOG_RATE_WINDOW_MS (60 s) rolling window. Subsequent errors within the
+ *   window are silently forwarded to the onError callback only, preventing
+ *   log flooding while preserving observability.
  *
  * @custom:security
  *   - Stack traces are suppressed in production to prevent information disclosure.
@@ -174,6 +242,7 @@ interface BoundaryState {
  *     into innerHTML, preventing XSS from crafted error messages.
  *   - The `onError` callback receives a sanitised report; callers must not log
  *     raw `error.stack` in production.
+ *   - Log rate-limiting prevents denial-of-service via log exhaustion.
  *
  * @custom:limitations
  *   - Does NOT catch errors in async event handlers, setTimeout, or SSR.
@@ -215,7 +284,11 @@ export class FrontendGlobalErrorBoundary extends Component<
 
   /**
    * @dev Called after an error has been thrown by a descendant component.
-   * Responsible for side-effects: logging and external error reporting.
+   * Responsible for side-effects: rate-limited logging and external reporting.
+   *
+   * Logging is bounded by shouldLog() to prevent log flooding. The onError
+   * callback is always invoked regardless of the rate limit so that external
+   * observability services receive every event.
    *
    * @param error The error that was thrown.
    * @param errorInfo React-provided component stack information.
@@ -224,15 +297,17 @@ export class FrontendGlobalErrorBoundary extends Component<
     const isContract = isSmartContractError(error);
     const report = buildErrorReport(error, errorInfo, isContract);
 
-    // Structured console log — always emitted so developers can see errors
-    // in both dev and production environments (server logs / browser console).
-    console.error(
-      'Documentation Error Boundary caught an error:',
-      error,
-      errorInfo,
-    );
+    // Rate-limited structured console log.
+    if (shouldLog()) {
+      console.error(
+        'Documentation Error Boundary caught an error:',
+        error,
+        errorInfo,
+      );
+    }
 
-    // Forward to caller-supplied reporting hook (Sentry, Datadog, etc.)
+    // Forward to caller-supplied reporting hook (Sentry, Datadog, etc.).
+    // Always called — not subject to the rate limit — so no events are lost.
     if (typeof this.props.onError === 'function') {
       this.props.onError(report);
     }

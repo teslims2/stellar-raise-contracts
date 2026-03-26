@@ -6,11 +6,30 @@ Technical reference for the React global error boundary component built for the 
 
 ## Overview
 
-The `GlobalErrorBoundary` component provides comprehensive error handling for React applications, with special focus on smart contract and blockchain-related errors. It prevents application crashes by catching JavaScript errors anywhere in the component tree and displaying user-friendly fallback UI.
+`FrontendGlobalErrorBoundary` is a React class component that catches synchronous render-phase errors anywhere in its wrapped component tree. It prevents full application crashes, classifies errors as generic or smart-contract related, logs them within configurable bounds, and renders an appropriate fallback UI with a recovery path.
 
 ```
-Error Occurs → Boundary Catches → Fallback UI → User Recovery Options
+Error thrown → getDerivedStateFromError (state) →
+componentDidCatch (rate-limited logging + onError callback) → fallback UI
 ```
+
+### Logging bounds
+
+`componentDidCatch` emits at most **5** `console.error` calls per **60-second** rolling window (`LOG_RATE_LIMIT` / `LOG_RATE_WINDOW_MS`). Once the limit is reached, console output is suppressed for the remainder of the window. The `onError` callback is **always** invoked regardless of the rate limit, so no events are lost from external observability services.
+
+This prevents log flooding when a component tree repeatedly throws (e.g. during a render loop or rapid retry cycles) and limits the risk of sensitive data appearing in high-volume log streams.
+
+---
+
+## Logging Bounds API
+
+| Export | Type | Value | Description |
+|--------|------|-------|-------------|
+| `LOG_RATE_LIMIT` | `number` | `5` | Max log entries per window |
+| `LOG_RATE_WINDOW_MS` | `number` | `60000` | Rolling window duration (ms) |
+| `shouldLog(now?)` | `function` | `boolean` | Returns true if a log entry is allowed |
+| `_logState` | `object` | `{ count, windowStart }` | Internal rate-limit state (test use only) |
+| `_resetLogState()` | `function` | `void` | Resets rate-limit state (test use only) |
 
 ---
 
@@ -232,9 +251,21 @@ try {
 - **Functions**: 100%
 - **Lines**: 95%+
 
+Test suites cover:
+- Custom error class instantiation and inheritance
+- `shouldLog()` rate-limiter unit tests (window reset, count bounds, state inspection)
+- Logging bounds integration: suppression after limit, `onError` always fires, window expiry resume
+- Normal (no-error) rendering
+- Generic and smart-contract fallback rendering
+- Custom fallback prop
+- Recovery via "Try Again" (success and persistent-error cases)
+- `onError` callback with structured report validation
+- Accessibility (`role="alert"`, `aria-live`, `aria-label`, `aria-hidden`)
+- Error classification edge cases (empty message, TypeError, keyword matching)
+
 ---
 
-## Security Considerations
+## Performance Impact
 
 ### Information Disclosure
 
@@ -248,15 +279,19 @@ try {
 - **Nested Boundaries**: Multiple boundaries can be nested for granular error handling
 - **Error Recovery**: Not all errors are recoverable; some require page reload
 
-### Smart Contract Error Handling
+### Security Considerations
 
-- **User-Friendly Messages**: Technical errors translated to user-understandable language
-- **Actionable Guidance**: Clear instructions for resolving common issues
-- **Security Boundaries**: Prevents sensitive contract data exposure
+| Concern | Mitigation |
+|---------|-----------|
+| Information disclosure | Stack traces and component stacks are omitted from `ErrorReport` in production |
+| XSS via error messages | Fallback UI renders error message as React text node (not `innerHTML`) |
+| Sensitive contract data | Custom error classes should never embed private keys, XDR, or account secrets in the message |
+| Async errors | The boundary does NOT catch errors in event handlers, `setTimeout`, or SSR — handle those separately |
+| Log flooding / DoS | `console.error` is rate-limited to `LOG_RATE_LIMIT` calls per `LOG_RATE_WINDOW_MS`; `onError` callback is always called |
 
 ---
 
-## Performance Impact
+## Test Coverage
 
 ### Bundle Size
 - **Minimal Overhead**: ~2KB gzipped
