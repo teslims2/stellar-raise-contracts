@@ -9,11 +9,13 @@ use soroban_sdk::{
 // ── Modules ──────────────────────────────────────────────────────────────────
 
 pub mod admin_upgrade_mechanism;
+pub mod access_control;
 pub mod campaign_goal_minimum;
 pub mod cargo_toml_rust;
 pub mod contract_state_size;
 pub mod contribute_error_handling;
 pub mod crowdfund_initialize_function;
+pub mod npm_package_lock;
 pub mod proptest_generator_boundary;
 pub mod refund_single_token;
 pub mod soroban_sdk_minor;
@@ -26,31 +28,16 @@ use crowdfund_initialize_function::{execute_initialize, InitParams};
 use refund_single_token::{
     execute_refund_single, refund_single_transfer, validate_refund_preconditions,
 };
-#[cfg(test)]
-#[path = "refund_single_token.test.rs"]
-mod refund_single_token_test;
-
-pub mod admin_upgrade_mechanism;
-pub mod access_control;
-#[cfg(test)]
-mod access_control_tests;
-pub mod soroban_sdk_minor;
-#[cfg(test)]
-mod soroban_sdk_minor_test;
-
-pub mod withdraw_event_emission;
 use withdraw_event_emission::{emit_fee_transferred, emit_withdrawn, mint_nfts_in_batch};
-#[cfg(test)]
-mod withdraw_event_emission_test;
 
-#[cfg(test)]
-#[path = "stellar_token_minter_test.rs"]
-mod stellar_token_minter_test_original;
+// ── Test Modules ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod test;
 #[cfg(test)]
 mod auth_tests;
+#[cfg(test)]
+mod access_control_tests;
 #[cfg(test)]
 #[path = "admin_upgrade_mechanism.test.rs"]
 mod admin_upgrade_mechanism_test;
@@ -66,13 +53,25 @@ mod contract_state_size_test;
 #[cfg(test)]
 mod contribute_error_handling_tests;
 #[cfg(test)]
+n  bn ,#[path = "npm_package_lock_tn  bn ,#[path = "npm_package_lock_test.rs"]
+57
+n  bn ,#[path = "npm_package_lock_test.rs"]
+57
+est.rs"]
+57
+mod npm_package_lock_test;
 
 #[cfg(test)]
 pub mod proptest_generator_boundary;
 #[cfg(test)]
 #[path = "proptest_generator_boundary.test.rs"]
 mod proptest_generator_boundary_test;
-pub mod stellar_token_minter;
+#[cfg(test)]
+#[path = "soroban_sdk_minor_test.rs"]
+mod soroban_sdk_minor_test;
+#[cfg(test)]
+#[path = "stellar_token_minter_test.rs"]
+mod stellar_token_minter_test_original;
 #[cfg(test)]
 #[path = "stellar_token_minter.test.rs"]
 mod stellar_token_minter_test_comprehensive;
@@ -218,13 +217,16 @@ pub enum ContractError {
     InvalidPlatformFee = 11,
     /// Returned by `initialize` when `bonus_goal <= goal`.
     InvalidBonusGoal = 12,
+    /// Returned by `initialize` when `goal < MIN_GOAL_AMOUNT`.
+    GoalTooLow = 13,
 
     /// Returned by `contribute` when `amount` is zero.
-    ZeroAmount = 8,
-    BelowMinimum = 9,
-    CampaignNotActive = 10,
+    ZeroAmount = 13,
+    BelowMinimum = 14,
+    CampaignNotActive = 15,
     /// Returned by `contribute` when `amount` is negative.
     NegativeAmount = 11,
+}
 
 /// Interface for an external NFT contract used to mint contributor rewards.
 #[contractclient(name = "NftContractClient")]
@@ -270,6 +272,7 @@ impl CrowdfundContract {
         goal: i128,
         deadline: u64,
         min_contribution: i128,
+        max_individual_contribution: Option<i128>,
         platform_config: Option<PlatformConfig>,
         bonus_goal: Option<i128>,
         bonus_goal_description: Option<String>,
@@ -1078,6 +1081,13 @@ impl CrowdfundContract {
             .instance()
             .get(&DataKey::MinContribution)
             .unwrap()
+    }
+
+    /// Returns the maximum individual contribution amount (if set).
+    pub fn max_individual_contribution(env: Env) -> Option<i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxIndividualContribution)
     }
 
     /// Returns comprehensive campaign statistics.
