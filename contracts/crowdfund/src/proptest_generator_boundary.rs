@@ -1,86 +1,72 @@
 //! # Proptest Generator Boundary Conditions
 //!
-//! @title   ProptestGeneratorBoundary
-//! @notice  Central authority for all boundary constants and validation helpers
-//!          used by property-based tests and frontend UI input validation.
-//! @dev     Standalone pure functions are exported for use in `#[cfg(test)]`
-//!          modules. The `ProptestGeneratorBoundary` contract exposes the same
-//!          logic on-chain so off-chain scripts can query current platform limits
-//!          without hard-coding them.
+//! This contract provides the single source of truth for all boundary conditions and validation
+//! constants used by the crowdfunding platform's property-based tests. Exposing these
+//! via a contract allows off-chain scripts and other contracts to dynamically query
+//! current safe operating limits.
 //!
-//! ## Security Assumptions
+//! ## Purpose
 //!
-//! - **Overflow safety**: All goal and contribution values are bounded well below
-//!   `i128::MAX`, eliminating integer-overflow risk in arithmetic.
-//! - **Division-by-zero**: `compute_progress_bps` / `clamp_progress_bps` guard
-//!   against `goal == 0` before dividing.
-//! - **Timestamp validity**: `DEADLINE_OFFSET_MIN` (1 000 s) prevents campaigns
-//!   so short they cause timing races in CI; `DEADLINE_OFFSET_MAX` (1 000 000 s)
-//!   prevents unreasonably far-future deadlines.
-//! - **Basis-point cap**: `PROGRESS_BPS_CAP` and `FEE_BPS_CAP` are both 10 000,
-//!   ensuring frontend progress bars and fee displays never exceed 100 %.
-//! - **Immutable constants**: All limits are compile-time constants, so they
-//!   cannot be mutated at runtime.
+//! - **Centralized Constants**: All boundary values defined in one place for consistency.
+//! - **Immutable Boundaries**: Constants are compile-time to ensure test stability.
+//! - **Public Transparency**: All limits are publicly readable and queryable.
+//! - **Safety Guards**: Includes validation and clamping logic against platform-wide floors and caps.
+//! - **CI/CD Optimization**: Enables dynamic test configuration without hardcoding limits.
+//!
+//! ## Security Model
+//!
+//! - **Overflow Protection**: All arithmetic uses `saturating_mul` and `checked_sub` where applicable.
+//! - **Division by Zero**: Guarded with explicit zero checks before division operations.
+//! - **Basis Points Capping**: Progress and fee calculations capped at 10,000 (100%) to prevent display errors.
+//! - **Timestamp Validity**: Deadline offsets exclude past and unreasonably large values.
+//! - **Resource Bounds**: Test case counts and batch sizes bounded to prevent accidental stress scenarios.
 
 // proptest_generator_boundary — Boundary constants and validation helpers.
 
 use soroban_sdk::{contract, contractimpl, Env, Symbol};
 
-// ── Boundary Constants ────────────────────────────────────────────────────────
+// ── Constants ────────────────────────────────────────────────────────────────
+// @notice All constants are immutable and define the safe operating boundaries
+//         for the crowdfunding platform and its property-based tests.
 
-/// Minimum deadline offset in seconds from `now` (~17 minutes).
-///
-/// @notice Values below this caused flaky proptest timing races and
-///         flickering countdown displays in the frontend UI.
+/// Minimum deadline offset in seconds (~17 minutes).
+/// @dev Prevents flaky tests due to timing races and ensures meaningful campaign duration.
 pub const DEADLINE_OFFSET_MIN: u64 = 1_000;
 
-/// Maximum deadline offset in seconds from `now` (~11.5 days).
-///
-/// @notice Prevents unreasonably far-future deadlines that break UI date
-///         formatting and exceed reasonable campaign windows.
+/// Maximum deadline offset in seconds (~11.5 days).
+/// @dev Avoids u64 overflow when added to ledger timestamps.
 pub const DEADLINE_OFFSET_MAX: u64 = 1_000_000;
 
-/// Minimum valid funding goal in token stroops.
-///
-/// @notice Goals below this produce division-by-zero or near-zero progress
-///         percentages that render incorrectly in the frontend progress bar.
+/// Minimum valid goal amount.
+/// @dev Prevents division-by-zero in progress calculations.
 pub const GOAL_MIN: i128 = 1_000;
 
-/// Maximum valid funding goal for proptest generation.
-///
-/// @notice Caps generator output to avoid i128 overflow in fee and progress
-///         calculations. 100 M stroops ≈ 10 XLM at 7-decimal precision.
+/// Maximum goal amount for test generations (10 XLM).
+/// @dev Keeps tests fast while covering large campaign scenarios.
 pub const GOAL_MAX: i128 = 100_000_000;
 
-/// Absolute floor for `min_contribution` values.
-///
-/// @notice Ensures at least one stroop must be contributed, preventing
-///         zero-amount contribution exploits.
+/// Absolute floor for contribution amounts.
+/// @dev Prevents zero-value contributions from polluting ledger state.
 pub const MIN_CONTRIBUTION_FLOOR: i128 = 1;
 
-/// Basis-point cap for campaign progress display (100 %).
-///
-/// @notice Frontend progress bars clamp to this value so over-funded
-///         campaigns never render above 100 %.
+/// Maximum progress in basis points (100%).
+/// @dev Frontend never displays >100% funded; prevents display errors.
 pub const PROGRESS_BPS_CAP: u32 = 10_000;
 
-/// Basis-point cap for platform fees (100 %).
-///
-/// @notice Prevents fee configurations that would consume the entire
-///         campaign payout.
+/// Maximum fee in basis points (100%).
+/// @dev Fee above this would exceed 100% of the contribution.
 pub const FEE_BPS_CAP: u32 = 10_000;
 
-/// Minimum number of proptest cases per property test.
-///
-/// @dev Keeps CI runtimes predictable; below 32 cases gives poor coverage.
+/// Minimum proptest case count.
+/// @dev Below this, boundary-adjacent values are rarely sampled.
 pub const PROPTEST_CASES_MIN: u32 = 32;
 
-/// Maximum number of proptest cases per property test.
-///
-/// @dev Above 256 cases the test suite exceeds the 15-minute CI timeout.
+/// Maximum proptest case count.
+/// @dev Balances coverage with CI execution time.
 pub const PROPTEST_CASES_MAX: u32 = 256;
 
-/// Maximum batch size for generator output slices.
+/// Maximum batch size for generator operations.
+/// @dev Prevents worst-case memory/gas spikes in test scaffolds.
 pub const GENERATOR_BATCH_MAX: u32 = 512;
 
 // ── Pure Validation Helpers ───────────────────────────────────────────────────
@@ -190,77 +176,185 @@ pub struct ProptestGeneratorBoundary;
 
 #[contractimpl]
 impl ProptestGeneratorBoundary {
+    // ── Getter Functions ──────────────────────────────────────────────────────
+    // @notice These functions return immutable boundary constants.
+    //         Used by off-chain scripts and other contracts to query safe limits.
+
     /// Returns the minimum deadline offset in seconds.
-    ///
-    /// @return `DEADLINE_OFFSET_MIN` (1 000).
+    /// @notice ~17 minutes; prevents flaky tests and ensures meaningful campaigns.
     pub fn deadline_offset_min(_env: Env) -> u64 {
         DEADLINE_OFFSET_MIN
     }
 
     /// Returns the maximum deadline offset in seconds.
-    ///
-    /// @return `DEADLINE_OFFSET_MAX` (1 000 000).
+    /// @notice ~11.5 days; avoids u64 overflow on ledger timestamps.
     pub fn deadline_offset_max(_env: Env) -> u64 {
         DEADLINE_OFFSET_MAX
     }
 
-    /// Returns the minimum valid goal amount in stroops.
-    ///
-    /// @return `GOAL_MIN` (1 000).
+    /// Returns the minimum valid goal amount.
+    /// @notice Prevents division-by-zero in progress calculations.
     pub fn goal_min(_env: Env) -> i128 {
         GOAL_MIN
     }
 
-    /// Returns the maximum goal amount for proptest generation.
-    ///
-    /// @return `GOAL_MAX` (100 000 000).
+    /// Returns the maximum goal amount for test generations.
+    /// @notice 10 XLM; keeps tests fast while covering large campaigns.
     pub fn goal_max(_env: Env) -> i128 {
         GOAL_MAX
     }
 
     /// Returns the absolute floor for contribution amounts.
-    ///
-    /// @return `MIN_CONTRIBUTION_FLOOR` (1).
+    /// @notice Prevents zero-value contributions from polluting state.
     pub fn min_contribution_floor(_env: Env) -> i128 {
         MIN_CONTRIBUTION_FLOOR
     }
 
-    /// Returns `true` if `offset` is within the valid deadline range.
-    ///
-    /// @param  offset  Seconds from now to the campaign deadline.
-    /// @return Boolean validity result.
+    /// Returns the maximum progress in basis points.
+    /// @notice 100%; frontend never displays >100% funded.
+    pub fn progress_bps_cap(_env: Env) -> u32 {
+        PROGRESS_BPS_CAP
+    }
+
+    /// Returns the maximum fee in basis points.
+    /// @notice 100%; fee above this would exceed the contribution.
+    pub fn fee_bps_cap(_env: Env) -> u32 {
+        FEE_BPS_CAP
+    }
+
+    /// Returns the minimum proptest case count.
+    /// @notice Below this, boundary-adjacent values are rarely sampled.
+    pub fn proptest_cases_min(_env: Env) -> u32 {
+        PROPTEST_CASES_MIN
+    }
+
+    /// Returns the maximum proptest case count.
+    /// @notice Balances coverage with CI execution time.
+    pub fn proptest_cases_max(_env: Env) -> u32 {
+        PROPTEST_CASES_MAX
+    }
+
+    /// Returns the maximum batch size for generator operations.
+    /// @notice Prevents worst-case memory/gas spikes in test scaffolds.
+    pub fn generator_batch_max(_env: Env) -> u32 {
+        GENERATOR_BATCH_MAX
+    }
+
+    // ── Validation Functions ──────────────────────────────────────────────────
+    // @notice These functions validate inputs against boundary constants.
+    //         Used by tests and off-chain scripts to ensure safe values.
+
+    /// Validates that a deadline offset is within [min, max] range.
+    /// @notice Rejects values that cause timestamp overflow or campaigns too short.
+    /// @param offset The deadline offset in seconds to validate.
+    /// @return true if offset is valid, false otherwise.
     pub fn is_valid_deadline_offset(_env: Env, offset: u64) -> bool {
         is_valid_deadline_offset(offset)
     }
 
-    /// Returns `true` if `goal` is within the valid goal range.
-    ///
-    /// @param  goal  Funding target in stroops.
-    /// @return Boolean validity result.
+    /// Validates that a goal is within [min, max] range.
+    /// @notice Rejects zero and negative goals to prevent division-by-zero.
+    /// @param goal The goal amount to validate.
+    /// @return true if goal is valid, false otherwise.
     pub fn is_valid_goal(_env: Env, goal: i128) -> bool {
         is_valid_goal(goal)
     }
 
+    /// Validates that a minimum contribution is within safe bounds.
+    /// @notice min_contribution must be >= MIN_CONTRIBUTION_FLOOR and <= goal.
+    /// @param min_contribution The minimum contribution to validate.
+    /// @param goal The campaign goal (used as upper bound).
+    /// @return true if min_contribution is valid, false otherwise.
+    pub fn is_valid_min_contribution(_env: Env, min_contribution: i128, goal: i128) -> bool {
+        min_contribution >= MIN_CONTRIBUTION_FLOOR && min_contribution <= goal
+    }
+
+    /// Validates that a contribution amount meets the minimum.
+    /// @notice Ensures amount >= min_contribution.
+    /// @param amount The contribution amount to validate.
+    /// @param min_contribution The minimum required contribution.
+    /// @return true if amount is valid, false otherwise.
+    pub fn is_valid_contribution_amount(_env: Env, amount: i128, min_contribution: i128) -> bool {
+        amount >= min_contribution
+    }
+
+    /// Validates that a fee basis points value is within cap.
+    /// @notice Rejects fees > 10,000 bps (100%).
+    /// @param fee_bps The fee in basis points to validate.
+    /// @return true if fee_bps is valid, false otherwise.
+    pub fn is_valid_fee_bps(_env: Env, fee_bps: u32) -> bool {
+        fee_bps <= FEE_BPS_CAP
+    }
+
+    /// Validates that a generator batch size is within bounds.
+    /// @notice Prevents worst-case memory/gas spikes.
+    /// @param batch_size The batch size to validate.
+    /// @return true if batch_size is valid, false otherwise.
+    pub fn is_valid_generator_batch_size(_env: Env, batch_size: u32) -> bool {
+        batch_size > 0 && batch_size <= GENERATOR_BATCH_MAX
+    }
+
+    // ── Clamping Functions ────────────────────────────────────────────────────
+    // @notice These functions clamp values into safe operating bounds.
+    //         Used by tests to ensure values stay within limits.
+
     /// Clamps a requested proptest case count into safe operating bounds.
-    ///
-    /// @param  requested  Caller-supplied case count.
-    /// @return Clamped value in `[32, 256]`.
+    /// @notice Protects CI runtime cost while preserving boundary signal.
+    /// @param requested The requested case count.
+    /// @return Clamped value in [PROPTEST_CASES_MIN, PROPTEST_CASES_MAX].
     pub fn clamp_proptest_cases(_env: Env, requested: u32) -> u32 {
         clamp_proptest_cases(requested)
     }
 
-    /// Computes campaign progress in basis points, capped at 10 000.
-    ///
-    /// @param  raised  Total tokens raised.
-    /// @param  goal    Campaign funding target.
-    /// @return Basis points in `[0, 10_000]`.
-    pub fn compute_progress_bps(_env: Env, raised: i128, goal: i128) -> u32 {
-        compute_progress_bps(raised, goal)
+    /// Clamps raw progress basis points to [0, PROGRESS_BPS_CAP].
+    /// @notice Negative values floor to 0; values above 10,000 cap at 10,000.
+    /// @dev Ensures frontend never displays >100% funded.
+    /// @param raw The raw progress value to clamp.
+    /// @return Clamped value in [0, PROGRESS_BPS_CAP].
+    pub fn clamp_progress_bps(_env: Env, raw: i128) -> u32 {
+        if raw <= 0 {
+            0
+        } else if raw >= PROGRESS_BPS_CAP as i128 {
+            PROGRESS_BPS_CAP
+        } else {
+            raw as u32
+        }
     }
 
-    /// Returns a diagnostic tag symbol used in boundary log events.
-    ///
-    /// @return The `Symbol` `"boundary"`.
+    // ── Derived Calculation Functions ─────────────────────────────────────────
+    // @notice These functions compute derived values using boundary constants.
+    //         All arithmetic is guarded against overflow and division-by-zero.
+
+    /// Computes progress in basis points, capped at 10,000.
+    /// @notice Returns 0 when goal <= 0 to avoid division-by-zero.
+    /// @dev Uses saturating_mul to prevent overflow.
+    /// @param raised The amount raised so far.
+    /// @param goal The campaign goal.
+    /// @return Progress in basis points, clamped to [0, PROGRESS_BPS_CAP].
+    pub fn compute_progress_bps(_env: Env, raised: i128, goal: i128) -> u32 {
+        if goal <= 0 {
+            return 0;
+        }
+        let raw = raised.saturating_mul(10_000) / goal;
+        Self::clamp_progress_bps(_env, raw)
+    }
+
+    /// Computes fee amount from a contribution and fee basis points.
+    /// @notice Returns 0 when amount <= 0 or fee_bps == 0.
+    /// @dev Uses saturating_mul to prevent overflow.
+    /// @param amount The contribution amount.
+    /// @param fee_bps The fee in basis points.
+    /// @return Fee amount (integer floor division).
+    pub fn compute_fee_amount(_env: Env, amount: i128, fee_bps: u32) -> i128 {
+        if amount <= 0 || fee_bps == 0 {
+            return 0;
+        }
+        amount.saturating_mul(fee_bps as i128) / 10_000
+    }
+
+    /// Returns a diagnostic tag for boundary log events.
+    /// @notice Used by off-chain indexers to filter boundary-related events.
+    /// @return Symbol "boundary" for event filtering.
     pub fn log_tag(_env: Env) -> Symbol {
         Symbol::new(&_env, "boundary")
     }

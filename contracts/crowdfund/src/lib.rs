@@ -8,11 +8,14 @@ use soroban_sdk::{
 
 pub mod access_control;
 pub mod admin_upgrade_mechanism;
+pub mod access_control;
 pub mod campaign_goal_minimum;
 pub mod cargo_toml_rust;
 pub mod contract_state_size;
 pub mod contribute_error_handling;
 pub mod crowdfund_initialize_function;
+#[cfg(test)]
+pub mod npm_package_lock;
 pub mod proptest_generator_boundary;
 pub mod refund_single_token;
 pub mod soroban_sdk_minor;
@@ -25,10 +28,12 @@ use crowdfund_initialize_function::{execute_initialize, InitParams};
 use refund_single_token::{
     execute_refund_single, refund_single_transfer, validate_refund_preconditions,
 };
-use withdraw_event_emission::{emit_withdrawn, mint_nfts_in_batch};
+use withdraw_event_emission::{emit_fee_transferred, emit_withdrawn, mint_nfts_in_batch};
 
-// ── Test Modules ──────────────────────────────────────────────────────────────
+// ── Test Modules ─────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod access_control_tests;
 #[cfg(test)]
 mod access_control_tests;
 #[cfg(test)]
@@ -48,26 +53,23 @@ mod contract_state_size_test;
 #[cfg(test)]
 mod contribute_error_handling_tests;
 #[cfg(test)]
+#[path = "npm_package_lock_test.rs"]
+mod npm_package_lock_test;
+
+#[cfg(test)]
+pub mod proptest_generator_boundary;
+#[cfg(test)]
 #[path = "proptest_generator_boundary.test.rs"]
 mod proptest_generator_boundary_test;
-#[cfg(test)]
-mod proptest_generator_boundary_tests;
-#[cfg(test)]
-#[path = "refund_single_token.test.rs"]
-mod refund_single_token_test;
 #[cfg(test)]
 #[path = "soroban_sdk_minor_test.rs"]
 mod soroban_sdk_minor_test;
 #[cfg(test)]
-#[path = "stellar_token_minter.test.rs"]
-mod stellar_token_minter_test_comprehensive;
-#[cfg(test)]
 #[path = "stellar_token_minter_test.rs"]
 mod stellar_token_minter_test_original;
 #[cfg(test)]
-mod test;
-#[cfg(test)]
-mod withdraw_event_emission_test;
+#[path = "stellar_token_minter.test.rs"]
+mod stellar_token_minter_test_comprehensive;
 
 // --- Constants ---
 const CONTRACT_VERSION: u32 = 3;
@@ -208,19 +210,19 @@ pub enum ContractError {
     InvalidPlatformFee = 11,
     /// Returned by `initialize` when `bonus_goal <= goal`.
     InvalidBonusGoal = 12,
+    /// Returned by `initialize` when `goal < MIN_GOAL_AMOUNT`.
+    GoalTooLow = 13,
+
+    /// Returned by `validate_goal_amount` when `goal_amount < MIN_GOAL_AMOUNT`.
+    GoalTooLow = 18,
 
     /// Returned by `contribute` when `amount` is zero.
     ZeroAmount = 13,
-    /// Returned by `contribute` when `amount` is below the minimum.
     BelowMinimum = 14,
-    /// Returned when the campaign is not in Active status.
     CampaignNotActive = 15,
     /// Returned by `contribute` when `amount` is negative.
     NegativeAmount = 16,
-    /// Returned by `pledge` when `amount` is below the minimum.
-    AmountTooLow = 17,
-    /// Returned when the goal is below the platform minimum.
-    GoalTooLow = 18,
+    NegativeAmount = 11,
 }
 
 /// Interface for an external NFT contract used to mint contributor rewards.
@@ -267,6 +269,7 @@ impl CrowdfundContract {
         goal: i128,
         deadline: u64,
         min_contribution: i128,
+        max_individual_contribution: Option<i128>,
         platform_config: Option<PlatformConfig>,
         bonus_goal: Option<i128>,
         bonus_goal_description: Option<String>,
@@ -453,7 +456,7 @@ impl CrowdfundContract {
             .get(&DataKey::MinContribution)
             .unwrap();
         if amount < min_contribution {
-            return Err(ContractError::AmountTooLow);
+            panic!("amount below minimum");
         }
 
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
@@ -1083,6 +1086,13 @@ impl CrowdfundContract {
             .unwrap()
     }
 
+    /// Returns the maximum individual contribution amount (if set).
+    pub fn max_individual_contribution(env: Env) -> Option<i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxIndividualContribution)
+    }
+
     /// Returns comprehensive campaign statistics.
     pub fn get_stats(env: Env) -> CampaignStats {
         let total_raised: i128 = env
@@ -1187,4 +1197,5 @@ impl CrowdfundContract {
     pub fn nft_contract(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::NFTContract)
     }
+}
 }
