@@ -38,15 +38,15 @@ pub mod error_codes {
     /// A checked arithmetic operation overflowed.
     pub const OVERFLOW: u32 = 6;
     /// `amount` was zero.
-    pub const ZERO_AMOUNT: u32 = 13;
+    pub const ZERO_AMOUNT: u32 = 14;
     /// `amount` was below `min_contribution`.
-    pub const BELOW_MINIMUM: u32 = 14;
+    pub const BELOW_MINIMUM: u32 = 15;
     /// Campaign status is not `Active`.
-    pub const CAMPAIGN_NOT_ACTIVE: u32 = 15;
+    pub const CAMPAIGN_NOT_ACTIVE: u32 = 16;
     /// `amount` was negative.
-    pub const NEGATIVE_AMOUNT: u32 = 16;
+    pub const NEGATIVE_AMOUNT: u32 = 17;
     /// Alias kept for off-chain scripts that used the old code 9.
-    /// Prefer BELOW_MINIMUM (14).
+    /// Prefer BELOW_MINIMUM (15).
     pub const AMOUNT_TOO_LOW: u32 = BELOW_MINIMUM;
 }
 
@@ -109,6 +109,10 @@ pub fn log_contribute_error(env: &soroban_sdk::Env, error: crate::ContractError)
         crate::ContractError::CampaignNotActive => (
             Symbol::new(env, "CampaignNotActive"),
             error_codes::CAMPAIGN_NOT_ACTIVE,
+        ),
+        crate::ContractError::NegativeAmount => (
+            Symbol::new(env, "NegativeAmount"),
+            error_codes::NEGATIVE_AMOUNT,
         ),
         _ => return,
     };
