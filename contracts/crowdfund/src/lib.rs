@@ -8,6 +8,8 @@ use soroban_sdk::{
 
 pub mod access_control;
 pub mod admin_upgrade_mechanism;
+pub mod algorithm_optimization;
+pub mod session_management;
 pub mod campaign_goal_minimum;
 pub mod cargo_toml_rust;
 pub mod contract_state_size;
