@@ -23,6 +23,7 @@ pub mod stellar_token_minter;
 pub mod stream_processing_optimization;
 pub mod withdraw_event_emission;
 pub mod security_compliance_automation;
+pub mod lazy_loading_optimization;
 
 // ── Imports from modules ──────────────────────────────────────────────────────
 
@@ -81,6 +82,9 @@ mod stream_processing_optimization_test;
 #[cfg(test)]
 #[path = "security_compliance_automation.test.rs"]
 mod security_compliance_automation_test;
+#[cfg(test)]
+#[path = "lazy_loading_optimization_test.rs"]
+mod lazy_loading_optimization_test;
 
 // --- Constants ---
 const CONTRACT_VERSION: u32 = 3;
