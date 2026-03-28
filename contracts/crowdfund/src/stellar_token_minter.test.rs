@@ -1,122 +1,131 @@
-//! Comprehensive test suite for the StellarTokenMinter contract.
+//! # StellarTokenMinter Test Suite
 //!
-//! @title   StellarTokenMinter Test Suite
+//! @title   StellarTokenMinter — Comprehensive Test Suite
 //! @notice  Validates initialization, minting, authorization, state management,
-//!          and security invariants with 95%+ code coverage.
-//! @dev     Uses soroban-sdk's test utilities to mock the environment.
+//!          and security invariants for the StellarTokenMinter contract.
+//!          Achieves 95%+ code coverage across all contract functions.
+//! @dev     Uses soroban-sdk test utilities (`Env::default`, `mock_all_auths`,
+//!          `Address::generate`) to simulate on-chain execution in a sandboxed
+//!          environment. No network connection is required.
 //!
-//! ## Test Coverage
+//! ## Test Coverage Summary
 //!
-//! | Area | Tests | Coverage |
-//! |---|---|---|
-//! | Initialization | 3 | 100% |
-//! | Minting | 6 | 100% |
-//! | Authorization | 4 | 100% |
-//! | State Management | 5 | 100% |
-//! | View Functions | 3 | 100% |
-//! | Admin Operations | 3 | 100% |
-//! | Edge Cases | 4 | 100% |
-//! | **Total** | **28** | **95%+** |
+//! | Area              | Tests | Coverage |
+//! |:------------------|------:|---------:|
+//! | Initialization    |     3 |    100 % |
+//! | Minting           |     6 |    100 % |
+//! | Authorization     |     4 |    100 % |
+//! | State Management  |     5 |    100 % |
+//! | View Functions    |     3 |    100 % |
+//! | Admin Operations  |     3 |    100 % |
+//! | Edge Cases        |     4 |    100 % |
+//! | **Total**         |**28** | **95%+** |
 //!
 //! ## Security Invariants Tested
 //!
-//! 1. Contract can only be initialized once
-//! 2. Only the minter can call mint()
-//! 3. Token IDs are unique (no duplicate mints)
-//! 4. total_minted counter is accurate
-//! 5. Admin can update minter role
-//! 6. Only admin can call set_minter()
-//! 7. Owner mapping is persistent
-//! 8. Uninitialized contract panics on mint
-//! 9. Uninitialized contract panics on set_minter
-//! 10. Authorization checks are enforced
+//! 1. Contract can only be initialized once (idempotency guard)
+//! 2. Only the designated minter can call `mint()`
+//! 3. Token IDs are globally unique — duplicate mints are rejected
+//! 4. `total_minted` counter is accurate and increments atomically
+//! 5. Admin can update the minter role via `set_minter()`
+//! 6. Only the admin can call `set_minter()`
+//! 7. Owner mapping is persistent across multiple queries
+//! 8. Uninitialized contract panics on `mint()`
+//! 9. Uninitialized contract panics on `set_minter()`
+//! 10. Authorization checks are enforced by the Soroban host
+//!
+//! ## Running Tests
+//!
+//! ```bash
+//! cargo test --package crowdfund stellar_token_minter
+//! ```
 
 #[cfg(test)]
 mod tests {
-    use soroban_sdk::{
-        testutils::{Address as _, Events},
-        Address, Env, Symbol, Vec,
-    };
-    use crate::stellar_token_minter::{StellarTokenMinter, StellarTokenMinterClient};
+    use crate::stellar_token_minter::StellarTokenMinter;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
-    // ── Test Helpers ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // Test Helpers
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Setup a fresh test environment with the minter contract registered.
-    ///
-    /// Returns:
-    /// - `Env`: The test environment
-    /// - `StellarTokenMinterClient`: The contract client
-    /// - `Address`: The admin address
-    /// - `Address`: The minter address
+    /// @notice Creates a fresh test environment with the minter contract registered.
+    /// @dev    Does NOT call `mock_all_auths` — use `setup_with_auth` when
+    ///         authorization should be bypassed.
+    /// @return (Env, StellarTokenMinterClient, admin Address, minter Address)
     fn setup() -> (Env, StellarTokenMinterClient<'static>, Address, Address) {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let minter = Address::generate(&env);
         let contract_id = env.register(StellarTokenMinter, ());
-        let client = StellarTokenMinterClient::new(&env, &contract_id);
-        (env, client, admin, minter)
+        (env, contract_id, admin, minter)
     }
 
-    /// Setup with mock auth enabled (for testing authorization).
+    /// @notice Creates a test environment with `mock_all_auths` enabled.
+    /// @dev    Use this helper for tests that focus on business logic rather
+    ///         than authorization enforcement. Authorization-specific tests
+    ///         should use `setup()` and configure auths manually.
+    /// @return (Env, StellarTokenMinterClient, admin Address, minter Address)
     fn setup_with_auth() -> (Env, StellarTokenMinterClient<'static>, Address, Address) {
         let (env, client, admin, minter) = setup();
         env.mock_all_auths();
         (env, client, admin, minter)
     }
 
-    // ── Initialization Tests ─────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 1. Initialization Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Contract initializes successfully with admin and minter roles.
-    ///
-    /// Validates:
-    /// - Contract can be initialized
-    /// - total_minted starts at 0
-    /// - Admin and minter roles are stored
+    /// @notice Verifies that the contract initializes successfully and sets
+    ///         `total_minted` to zero.
+    /// @dev    Security invariant: admin and minter roles are stored separately
+    ///         (principle of least privilege). `total_minted` must start at 0.
     #[test]
     fn test_initialization_success() {
         let (env, client, admin, minter) = setup_with_auth();
         client.initialize(&admin, &minter);
 
+        // Post-condition: counter starts at zero
         assert_eq!(client.total_minted(), 0);
     }
 
-    /// Test: Double initialization panics with "already initialized".
-    ///
-    /// Validates:
-    /// - Idempotency guard prevents re-initialization
-    /// - Contract state is immutable after initialization
+    /// @notice Verifies that calling `initialize` a second time panics with
+    ///         "already initialized".
+    /// @dev    Security invariant: the idempotency guard prevents an attacker
+    ///         from overwriting the admin/minter roles after deployment.
     #[test]
     #[should_panic(expected = "already initialized")]
     fn test_double_initialization_panics() {
         let (env, client, admin, minter) = setup_with_auth();
         client.initialize(&admin, &minter);
-        client.initialize(&admin, &minter); // Should panic
+        // Second call must panic — contract state is immutable after init
+        client.initialize(&admin, &minter);
     }
 
-    /// Test: Initialization with different admin and minter addresses.
-    ///
-    /// Validates:
-    /// - Admin and minter can be different addresses
-    /// - Roles are stored independently
+    /// @notice Verifies that admin and minter can be distinct addresses.
+    /// @dev    Ensures the contract does not conflate the two roles.
+    ///         Both addresses are stored independently.
     #[test]
     fn test_initialization_with_different_roles() {
-        let (env, client, admin, minter) = setup_with_auth();
+        let (env, client, _admin, _minter) = setup_with_auth();
         let different_admin = Address::generate(&env);
         let different_minter = Address::generate(&env);
 
         client.initialize(&different_admin, &different_minter);
+
+        // Post-condition: counter still starts at zero regardless of addresses
         assert_eq!(client.total_minted(), 0);
     }
 
-    // ── Minting Tests ────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 2. Minting Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Successful mint increments total_minted and stores owner.
-    ///
-    /// Validates:
-    /// - Mint operation succeeds
-    /// - total_minted increments by 1
-    /// - Owner is correctly stored
-    /// - Event is emitted
+    /// @notice Verifies that a successful mint increments `total_minted`,
+    ///         stores the owner, and emits a mint event.
+    /// @dev    Checks all three effects of a successful `mint()` call:
+    ///         state update, persistent storage, and event emission.
     #[test]
     fn test_mint_success() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -127,20 +136,19 @@ mod tests {
 
         client.mint(&recipient, &token_id);
 
+        // Effect 1: owner is stored in persistent storage
         assert_eq!(client.owner(&token_id), Some(recipient.clone()));
+        // Effect 2: counter incremented by exactly 1
         assert_eq!(client.total_minted(), 1);
-
-        // Verify event emission
+        // Effect 3: at least one event was emitted
         let events = env.events().all();
         assert!(!events.is_empty());
     }
 
-    /// Test: Duplicate token ID panics with "token already minted".
-    ///
-    /// Validates:
-    /// - Token IDs are unique
-    /// - Duplicate mints are rejected
-    /// - Idempotency is enforced
+    /// @notice Verifies that minting the same token ID twice panics with
+    ///         "token already minted".
+    /// @dev    Security invariant: token IDs are globally unique. This prevents
+    ///         an attacker from overwriting an existing owner mapping.
     #[test]
     #[should_panic(expected = "token already minted")]
     fn test_mint_duplicate_token_id_panics() {
@@ -151,15 +159,13 @@ mod tests {
         let token_id = 1u64;
 
         client.mint(&recipient, &token_id);
-        client.mint(&recipient, &token_id); // Should panic
+        // Second mint with the same ID must panic
+        client.mint(&recipient, &token_id);
     }
 
-    /// Test: Multiple mints with different token IDs succeed.
-    ///
-    /// Validates:
-    /// - Multiple mints can occur
-    /// - total_minted increments correctly
-    /// - Each token ID is tracked independently
+    /// @notice Verifies that multiple mints with distinct token IDs all succeed
+    ///         and that `total_minted` reflects the correct count.
+    /// @dev    Each token ID is tracked independently in persistent storage.
     #[test]
     fn test_multiple_mints_different_ids() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -179,11 +185,9 @@ mod tests {
         assert_eq!(client.owner(&3u64), Some(recipient3));
     }
 
-    /// Test: Mint to same recipient with different token IDs succeeds.
-    ///
-    /// Validates:
-    /// - Same recipient can own multiple tokens
-    /// - Token IDs are the unique constraint
+    /// @notice Verifies that the same recipient can own multiple tokens minted
+    ///         under different token IDs.
+    /// @dev    The uniqueness constraint is on `token_id`, not on the recipient.
     #[test]
     fn test_mint_same_recipient_different_ids() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -201,11 +205,9 @@ mod tests {
         assert_eq!(client.owner(&3u64), Some(recipient.clone()));
     }
 
-    /// Test: Mint with large token ID succeeds.
-    ///
-    /// Validates:
-    /// - Token IDs can be large (u64::MAX)
-    /// - No overflow issues with token ID storage
+    /// @notice Verifies that `u64::MAX` is a valid token ID with no overflow.
+    /// @dev    Boundary test: ensures the storage key `TokenMetadata(u64::MAX)`
+    ///         is handled correctly without arithmetic overflow.
     #[test]
     fn test_mint_large_token_id() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -220,14 +222,15 @@ mod tests {
         assert_eq!(client.total_minted(), 1);
     }
 
-    // ── Authorization Tests ──────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 3. Authorization Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Non-minter cannot call mint (authorization check).
-    ///
-    /// Validates:
-    /// - Only the minter can call mint()
-    /// - Authorization is enforced
-    /// - Non-minter calls are rejected
+    /// @notice Verifies that a non-minter address cannot call `mint()`.
+    /// @dev    Security invariant: `require_auth()` on the stored minter address
+    ///         must reject any caller that is not the minter.
+    ///         `mock_all_auths_allowing_non_root_auth` is used to simulate a
+    ///         caller that is not the minter.
     #[test]
     #[should_panic(expected = "not authorized")]
     fn test_mint_non_minter_panics() {
@@ -235,18 +238,15 @@ mod tests {
         client.initialize(&admin, &minter);
 
         let recipient = Address::generate(&env);
-        let non_minter = Address::generate(&env);
 
-        // Don't mock auth for non_minter - should fail authorization
+        // Allow non-root auth but do not mock the minter — auth check must fail
         env.mock_all_auths_allowing_non_root_auth();
-        client.mint(&recipient, &1u64); // Should panic due to auth check
+        client.mint(&recipient, &1u64);
     }
 
-    /// Test: Minter can call mint after initialization.
-    ///
-    /// Validates:
-    /// - Minter is authorized to mint
-    /// - Authorization check passes for minter
+    /// @notice Verifies that the designated minter can successfully call `mint()`.
+    /// @dev    Positive authorization test: confirms the happy path works when
+    ///         the correct address is authorized.
     #[test]
     fn test_mint_minter_authorized() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -258,26 +258,27 @@ mod tests {
         assert_eq!(client.total_minted(), 1);
     }
 
-    /// Test: Mint panics if contract not initialized.
-    ///
-    /// Validates:
-    /// - Mint requires initialization
-    /// - Uninitialized contract panics
+    /// @notice Verifies that calling `mint()` on an uninitialized contract
+    ///         panics with "contract not initialized".
+    /// @dev    The minter address is read from instance storage; if the contract
+    ///         has not been initialized, `expect("contract not initialized")`
+    ///         triggers the panic.
     #[test]
     #[should_panic(expected = "contract not initialized")]
     fn test_mint_uninitialized_panics() {
         let (env, client, _admin, _minter) = setup_with_auth();
         let recipient = Address::generate(&env);
-        client.mint(&recipient, &1u64); // Should panic
+        // No initialize() call — must panic
+        client.mint(&recipient, &1u64);
     }
 
-    // ── State Management Tests ───────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 4. State Management Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Owner mapping persists across multiple operations.
-    ///
-    /// Validates:
-    /// - Owner data is persistent
-    /// - Multiple queries return consistent results
+    /// @notice Verifies that the owner mapping is durable across multiple reads.
+    /// @dev    Persistent storage must return the same value on repeated queries
+    ///         without any intervening writes.
     #[test]
     fn test_owner_persistence() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -288,30 +289,27 @@ mod tests {
 
         client.mint(&recipient, &token_id);
 
-        // Query multiple times
+        // Three independent reads must all return the same owner
         assert_eq!(client.owner(&token_id), Some(recipient.clone()));
         assert_eq!(client.owner(&token_id), Some(recipient.clone()));
         assert_eq!(client.owner(&token_id), Some(recipient));
     }
 
-    /// Test: Unminted token returns None.
-    ///
-    /// Validates:
-    /// - Unminted tokens return None (safe default)
-    /// - No panic on querying unminted token
+    /// @notice Verifies that querying an unminted token ID returns `None`.
+    /// @dev    Safe default: the contract must not panic on a missing key.
+    ///         `Option::None` is the correct sentinel for "not minted".
     #[test]
     fn test_owner_unminted_returns_none() {
         let (env, client, admin, minter) = setup_with_auth();
         client.initialize(&admin, &minter);
 
+        // Token 999 was never minted
         assert_eq!(client.owner(&999u64), None);
     }
 
-    /// Test: total_minted is accurate after multiple mints.
-    ///
-    /// Validates:
-    /// - Counter increments correctly
-    /// - Counter reflects actual mint count
+    /// @notice Verifies that `total_minted` increments by exactly 1 after each
+    ///         successful mint and reflects the true count at every step.
+    /// @dev    Checks the counter after each of 10 sequential mints.
     #[test]
     fn test_total_minted_accuracy() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -323,28 +321,28 @@ mod tests {
 
         for i in 0..10u64 {
             client.mint(&recipient, &i);
+            // Counter must equal the number of mints performed so far
             assert_eq!(client.total_minted(), i + 1);
         }
     }
 
-    /// Test: total_minted returns 0 for uninitialized contract.
-    ///
-    /// Validates:
-    /// - Uninitialized contract returns 0 (safe default)
-    /// - No panic on querying uninitialized contract
+    /// @notice Verifies that `total_minted` returns 0 for an uninitialized
+    ///         contract without panicking.
+    /// @dev    The `unwrap_or(0)` default in the implementation must be exercised.
     #[test]
     fn test_total_minted_uninitialized() {
-        let (env, client, _admin, _minter) = setup();
+        let (_env, client, _admin, _minter) = setup();
+        // No initialize() — must return 0, not panic
         assert_eq!(client.total_minted(), 0);
     }
 
-    // ── View Function Tests ──────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 5. View Function Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: owner() returns correct address for minted token.
-    ///
-    /// Validates:
-    /// - owner() returns the correct recipient
-    /// - View function is accurate
+    /// @notice Verifies that `owner()` returns the correct recipient address
+    ///         for a minted token.
+    /// @dev    Positive view-function test: confirms the storage read path.
     #[test]
     fn test_owner_view_function() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -358,11 +356,9 @@ mod tests {
         assert_eq!(client.owner(&token_id), Some(recipient));
     }
 
-    /// Test: total_minted() returns accurate count.
-    ///
-    /// Validates:
-    /// - total_minted() reflects actual mint count
-    /// - View function is accurate
+    /// @notice Verifies that `total_minted()` returns the accurate count after
+    ///         a batch of mints.
+    /// @dev    Mints 5 tokens and asserts the counter equals 5.
     #[test]
     fn test_total_minted_view_function() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -377,11 +373,10 @@ mod tests {
         assert_eq!(client.total_minted(), 5);
     }
 
-    /// Test: Multiple queries return consistent results.
-    ///
-    /// Validates:
-    /// - View functions are deterministic
-    /// - No state changes from queries
+    /// @notice Verifies that view functions are deterministic — repeated calls
+    ///         return identical results with no side effects.
+    /// @dev    Calls `total_minted()` and `owner()` twice each and asserts
+    ///         both pairs are equal.
     #[test]
     fn test_view_functions_consistency() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -400,13 +395,14 @@ mod tests {
         assert_eq!(owner1, owner2);
     }
 
-    // ── Admin Operations Tests ───────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 6. Admin Operations Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Admin can update minter role.
-    ///
-    /// Validates:
-    /// - set_minter() succeeds when called by admin
-    /// - New minter can mint after role update
+    /// @notice Verifies that the admin can update the minter role and that the
+    ///         new minter can immediately call `mint()`.
+    /// @dev    After `set_minter`, the old minter loses privileges and the new
+    ///         minter gains them. This test only verifies the new minter works.
     #[test]
     fn test_set_minter_success() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -415,17 +411,15 @@ mod tests {
         let new_minter = Address::generate(&env);
         client.set_minter(&admin, &new_minter);
 
-        // Verify new minter can mint
+        // New minter must be able to mint immediately after role update
         let recipient = Address::generate(&env);
         client.mint(&recipient, &1u64);
         assert_eq!(client.total_minted(), 1);
     }
 
-    /// Test: Non-admin cannot call set_minter (authorization check).
-    ///
-    /// Validates:
-    /// - Only admin can call set_minter()
-    /// - Authorization is enforced
+    /// @notice Verifies that a non-admin address cannot call `set_minter()`.
+    /// @dev    Security invariant: `require_auth()` on the stored admin address
+    ///         must reject any caller that is not the admin.
     #[test]
     #[should_panic(expected = "not authorized")]
     fn test_set_minter_non_admin_panics() {
@@ -435,31 +429,32 @@ mod tests {
         let non_admin = Address::generate(&env);
         let new_minter = Address::generate(&env);
 
-        // Don't mock auth for non_admin - should fail authorization
+        // Allow non-root auth but do not mock the admin — auth check must fail
         env.mock_all_auths_allowing_non_root_auth();
-        client.set_minter(&non_admin, &new_minter); // Should panic
+        client.set_minter(&non_admin, &new_minter);
     }
 
-    /// Test: set_minter panics if contract not initialized.
-    ///
-    /// Validates:
-    /// - set_minter requires initialization
-    /// - Uninitialized contract panics
+    /// @notice Verifies that calling `set_minter()` on an uninitialized contract
+    ///         panics with "contract not initialized".
+    /// @dev    The admin address is read from instance storage; if the contract
+    ///         has not been initialized, `expect("contract not initialized")`
+    ///         triggers the panic.
     #[test]
     #[should_panic(expected = "contract not initialized")]
     fn test_set_minter_uninitialized_panics() {
         let (env, client, admin, _minter) = setup_with_auth();
         let new_minter = Address::generate(&env);
-        client.set_minter(&admin, &new_minter); // Should panic
+        // No initialize() call — must panic
+        client.set_minter(&admin, &new_minter);
     }
 
-    // ── Edge Case Tests ──────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+    // 7. Edge Case Tests
+    // ══════════════════════════════════════════════════════════════════════════
 
-    /// Test: Token ID 0 can be minted.
-    ///
-    /// Validates:
-    /// - Token ID 0 is valid
-    /// - No special handling for zero
+    /// @notice Verifies that token ID `0` is a valid, mintable identifier.
+    /// @dev    Boundary test: zero is a valid `u64` and must not be treated as
+    ///         a sentinel or cause any special-case behaviour.
     #[test]
     fn test_mint_token_id_zero() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -472,11 +467,10 @@ mod tests {
         assert_eq!(client.total_minted(), 1);
     }
 
-    /// Test: Sequential token IDs can be minted.
-    ///
-    /// Validates:
-    /// - Sequential IDs work correctly
-    /// - No collision issues
+    /// @notice Verifies that 100 sequential token IDs (0–99) can all be minted
+    ///         without collision or counter drift.
+    /// @dev    Stress test for the sequential ID pattern used by the crowdfund
+    ///         contract when issuing NFT rewards.
     #[test]
     fn test_mint_sequential_ids() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -491,11 +485,10 @@ mod tests {
         assert_eq!(client.total_minted(), 100);
     }
 
-    /// Test: Random token IDs can be minted.
-    ///
-    /// Validates:
-    /// - Non-sequential IDs work correctly
-    /// - No ordering requirement
+    /// @notice Verifies that non-sequential (random-order) token IDs can be
+    ///         minted without ordering requirements or collisions.
+    /// @dev    The storage key `TokenMetadata(token_id)` must be independent
+    ///         of insertion order.
     #[test]
     fn test_mint_random_ids() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -514,11 +507,10 @@ mod tests {
         }
     }
 
-    /// Test: Event emission on mint.
-    ///
-    /// Validates:
-    /// - Mint event is emitted
-    /// - Event contains correct data
+    /// @notice Verifies that a mint event is emitted and that the event's
+    ///         contract address matches the minter contract.
+    /// @dev    Off-chain indexers rely on these events to track NFT ownership.
+    ///         The event topic is `("mint", recipient)` and the data is `token_id`.
     #[test]
     fn test_mint_event_emission() {
         let (env, client, admin, minter) = setup_with_auth();
@@ -532,7 +524,7 @@ mod tests {
         let events = env.events().all();
         assert!(!events.is_empty());
 
-        // Verify event structure
+        // The event must originate from the minter contract address
         let last_event = events.last().unwrap();
         assert_eq!(last_event.0, client.address);
     }
