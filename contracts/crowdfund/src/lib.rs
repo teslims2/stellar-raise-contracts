@@ -36,6 +36,7 @@ pub mod security_analytics;
 pub mod conditional_optimization;
 pub mod batch_processing_optimization;
 pub mod state_compression;
+pub mod optimistic_execution;
 
 use crate::reentrancy_guard::{enter_transfer, exit_transfer, protected_transfer};
 
@@ -123,6 +124,9 @@ mod security_analytics_test;
 mod conditional_optimization_test;
 #[path = "batch_processing_optimization.test.rs"]
 mod batch_processing_optimization_test;
+#[cfg(test)]
+#[path = "optimistic_execution.test.rs"]
+mod optimistic_execution_test;
 #[cfg(test)]
 #[path = "state_compression.test.rs"]
 mod state_compression_test;
